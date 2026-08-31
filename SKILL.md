@@ -64,7 +64,77 @@ Reuse them for every later video in that project.
 
 Split each word into `[consonant, vowel, nasal, has_inherent_schwa]` units,
 handling viraam, dependent vowels, nukta forms, and the nasal marks
-(`ं ँ ः`). Then apply **schwa deletion** — without it `मतलब` comes out
+(`ं ँ ः`), then map each unit with the tables below.
+
+**Target the way people actually type Hindi**, not scholarly transliteration:
+no diacritics, and retroflex and dental collapse onto the same Roman letter —
+`ट` and `त` are both `t`, `ड` and `द` are both `d`. The academic convention is
+the [Library of Congress Hindi romanization table](https://www.loc.gov/catdir/cpso/romanization/hindi.pdf),
+but its `ṭa` / `ṛha` diacritics are not what this skill is for.
+
+**Consonants**
+
+| | | | | |
+|---|---|---|---|---|
+| `क` k | `ख` kh | `ग` g | `घ` gh | `ङ` ng |
+| `च` ch | `छ` chh | `ज` j | `झ` jh | `ञ` n |
+| `ट` t | `ठ` th | `ड` d | `ढ` dh | `ण` n |
+| `त` t | `थ` th | `द` d | `ध` dh | `न` n |
+| `प` p | `फ` ph | `ब` b | `भ` bh | `म` m |
+| `य` y | `र` r | `ल` l | `व` v | `श` sh |
+| `ष` sh | `स` s | `ह` h | | |
+
+**Nukta forms** — for loanwords from Urdu, Persian, Arabic and English:
+
+| `क़` | `ख़` | `ग़` | `ज़` | `ड़` | `ढ़` | `फ़` |
+|---|---|---|---|---|---|---|
+| q | kh | g | z | r | rh | f |
+
+`ज़` → `z` and `फ़` → `f` are the two that matter most: without them *zaroor*
+comes out "jaroor" and *fayda* comes out "phayda". ASR frequently drops the
+nukta altogether, so handle the bare `ज` / `फ` as well and let the glossary
+catch whatever still slips through.
+
+**Nukta letters are usually two codepoints, not one** — a base letter plus the
+combining nukta sign `़` (U+093C). A mapper that walks the string one character
+at a time will read `ज़` as a plain `ज` and silently drop the nukta. Look ahead
+for U+093C when you split into units, or normalise first.
+
+**Common conjuncts** worth special-casing: `क्ष` ksh, `त्र` tr, `ज्ञ` gy, `श्र` shr.
+
+**Vowels** — each has an independent form (word-initial) and a matra (attached
+to a consonant). Both produce the same Roman output:
+
+| Independent | Matra | Roman |
+|---|---|---|
+| `अ` | — (inherent) | a |
+| `आ` | `ा` | aa |
+| `इ` | `ि` | i |
+| `ई` | `ी` | ee |
+| `उ` | `ु` | u |
+| `ऊ` | `ू` | oo |
+| `ऋ` | `ृ` | ri |
+| `ए` | `े` | e |
+| `ऐ` | `ै` | ai |
+| `ओ` | `ो` | o |
+| `औ` | `ौ` | au |
+
+`ई` and `ऊ` deliberately produce `ee` and `oo` at this stage — the
+normalisation step below turns them into `i` and `u` where that reads better,
+and leaves them alone where it does not (*hoon*, *doon*).
+
+**Marks**
+
+| Mark | Rule |
+|---|---|
+| `ं` anusvara | Homorganic nasal: `m` before the labials `प फ ब भ म`, `n` everywhere else. So `लंबा` → *lamba*, but `हिंदी` → *hindi* and `अंदर` → *andar*. |
+| `ँ` chandrabindu | `n` — `हूँ` → *hoon* |
+| `ः` visarga | `h` — `दुःख` → *dukh*. Rare in modern Hindi. |
+| `्` viraam | Deletes that consonant's inherent `a`; this is what forms conjuncts |
+| `ऽ` avagraha | Drop it |
+| `० १ २ ३ ४ ५ ६ ७ ८ ९` | `0`–`9` |
+
+Then apply **schwa deletion** — without it `मतलब` comes out
 "matalaba" instead of "matlab":
 
 1. **Word-final:** drop the inherent `a` on the last consonant unit (unless it carries a nasal).
