@@ -5,268 +5,208 @@ description: Use when the user gives a YouTube link or playlist to a Hindi or Hi
 
 # Hindi Video Transcript
 
-## Overview
+Turn a Hindi/Hinglish YouTube video or playlist into two files per video: an
+exact Devanagari transcript and a Roman Hindi one.
 
-Turn a Hindi/Hinglish YouTube video (or a whole playlist) into two text files:
-an exact line-by-line transcript in the original Devanagari, and a Roman Hindi
-version.
+## Do not use when
 
-**Core principle:** captions are ~5-8x cheaper in tokens than video frames.
-Take the best caption track available — human-made subtitles over
-auto-captions, original language over auto-translated.
+- The value is on screen — silent demos, visual walkthroughs
+- There is no caption track
+- The video is not Hindi — fetch its track directly, skip transliteration
 
-**This skill ships no code and no glossary.** It is the procedure. The scripts
-and the glossary are built **inside the user's project**, because a glossary is
-domain vocabulary: a stock-trading course and a cooking course need different
-ones, and one shared file would fit neither. A new machine needs only this file.
+## Layout
 
-## When to Use
+One base folder holds one shared `tools/` and one folder per subject.
+Glossaries are per subject and must never merge, so each keeps its own.
 
-- User pastes a YouTube link or playlist to a Hindi/Hinglish video and wants it read, summarized, or understood
-- User wants a course/lecture transcript they can search or keep
-- User asks for Hinglish/Roman Hindi text from a Hindi video
-
-**When NOT to use:**
-- The value is in what's *on screen* (silent demos, visual walkthroughs) — captions won't capture it
-- Video has no captions at all — skip it; audio + Whisper is a different job
-- Non-Hindi videos — fetch the caption track directly, no transliteration needed
-
-## Step 1 — Ask the user first
-
-Ask all of these in ONE AskUserQuestion call, before downloading anything:
-
-| Ask | Why |
-|---|---|
-| **YouTube link** | Single video or playlist — detect which |
-| **Save location** | Full folder path. Never guess this. |
-| **Timestamps in the Roman file?** | Default **no**. This file often gets fed back to an agent to read in full; timestamps inflate it. Say yes only if they want to jump back into the video. |
-| **How many videos** (playlist only) | One / all / batches of N |
-
-## Step 2 — Check the tooling
-
-`yt-dlp` must be reachable **from the interpreter you launch with**, and that is
-the usual first failure: on Windows a bare `python` is often a venv that lacks
-it while another Python on the same box has it. Check before assuming:
-
-```bash
-py -3 -m yt_dlp --version
+```
+<base>/
+├── tools/                    copied once, every project uses it
+│     translit.py
+│     convert.py
+├── Trading Course/
+│   ├── 01 - Charting.txt     what the user reads
+│   ├── glossary.py           this subject's own
+│   ├── _glossary-todo.txt    delete when clean
+│   └── raw/                  never opened by hand
+│         01 - Charting (hi-orig).txt
+│         01 - Charting.json3
+└── Cooking Course/           new subject = new folder, nothing else to set up
 ```
 
-If that prints a version, run everything with `py -3`. If nothing has it,
-`pip install yt-dlp`.
+## Step 1 — Ask first
 
-## Step 3 — Build the project's scripts
+One `AskUserQuestion` call, before downloading anything:
 
-Create these in a `tools/` folder beside the transcripts, once per project.
-Reuse them for every later video in that project.
-
-### `translit.py` — Devanagari to Roman
-
-Split each word into `[consonant, vowel, nasal, has_inherent_schwa]` units,
-handling viraam, dependent vowels, nukta forms, and the nasal marks
-(`ं ँ ः`), then map each unit with the tables below.
-
-**Target the way people actually type Hindi**, not scholarly transliteration:
-no diacritics, and retroflex and dental collapse onto the same Roman letter —
-`ट` and `त` are both `t`, `ड` and `द` are both `d`. The academic convention is
-the [Library of Congress Hindi romanization table](https://www.loc.gov/catdir/cpso/romanization/hindi.pdf),
-but its `ṭa` / `ṛha` diacritics are not what this skill is for.
-
-**Consonants**
-
-| | | | | |
-|---|---|---|---|---|
-| `क` k | `ख` kh | `ग` g | `घ` gh | `ङ` ng |
-| `च` ch | `छ` chh | `ज` j | `झ` jh | `ञ` n |
-| `ट` t | `ठ` th | `ड` d | `ढ` dh | `ण` n |
-| `त` t | `थ` th | `द` d | `ध` dh | `न` n |
-| `प` p | `फ` ph | `ब` b | `भ` bh | `म` m |
-| `य` y | `र` r | `ल` l | `व` v | `श` sh |
-| `ष` sh | `स` s | `ह` h | | |
-
-**Nukta forms** — for loanwords from Urdu, Persian, Arabic and English:
-
-| `क़` | `ख़` | `ग़` | `ज़` | `ड़` | `ढ़` | `फ़` |
-|---|---|---|---|---|---|---|
-| q | kh | g | z | r | rh | f |
-
-`ज़` → `z` and `फ़` → `f` are the two that matter most: without them *zaroor*
-comes out "jaroor" and *fayda* comes out "phayda". ASR frequently drops the
-nukta altogether, so handle the bare `ज` / `फ` as well and let the glossary
-catch whatever still slips through.
-
-**Nukta letters are usually two codepoints, not one** — a base letter plus the
-combining nukta sign `़` (U+093C). A mapper that walks the string one character
-at a time will read `ज़` as a plain `ज` and silently drop the nukta. Look ahead
-for U+093C when you split into units, or normalise first.
-
-**Common conjuncts** worth special-casing: `क्ष` ksh, `त्र` tr, `ज्ञ` gy, `श्र` shr.
-
-**Vowels** — each has an independent form (word-initial) and a matra (attached
-to a consonant). Both produce the same Roman output:
-
-| Independent | Matra | Roman |
-|---|---|---|
-| `अ` | — (inherent) | a |
-| `आ` | `ा` | aa |
-| `इ` | `ि` | i |
-| `ई` | `ी` | ee |
-| `उ` | `ु` | u |
-| `ऊ` | `ू` | oo |
-| `ऋ` | `ृ` | ri |
-| `ए` | `े` | e |
-| `ऐ` | `ै` | ai |
-| `ओ` | `ो` | o |
-| `औ` | `ौ` | au |
-
-`ई` and `ऊ` deliberately produce `ee` and `oo` at this stage — the
-normalisation step below turns them into `i` and `u` where that reads better,
-and leaves them alone where it does not (*hoon*, *doon*).
-
-**Marks**
-
-| Mark | Rule |
+| Ask | Note |
 |---|---|
-| `ं` anusvara | Homorganic nasal: `m` before the labials `प फ ब भ म`, `n` everywhere else. So `लंबा` → *lamba*, but `हिंदी` → *hindi* and `अंदर` → *andar*. |
-| `ँ` chandrabindu | `n` — `हूँ` → *hoon* |
-| `ः` visarga | `h` — `दुःख` → *dukh*. Rare in modern Hindi. |
-| `्` viraam | Deletes that consonant's inherent `a`; this is what forms conjuncts |
-| `ऽ` avagraha | Drop it |
-| `० १ २ ३ ४ ५ ६ ७ ८ ९` | `0`–`9` |
+| YouTube link | Detect single video or playlist |
+| Base folder | Full path. Never guess, never default |
+| Timestamps in the Roman file? | Default **no** |
+| How many videos | Playlist only: one / all / batches of N |
 
-Then apply **schwa deletion** — without it `मतलब` comes out
-"matalaba" instead of "matlab":
+Then list `<base>` and ask once more: an existing subject folder, or a new one
+and its name. Name it after the content, never after this skill.
 
-1. **Word-final:** drop the inherent `a` on the last consonant unit (unless it carries a nasal).
-2. **Medial, right to left:** in `V C[a] C V`, drop the `a` — only when both neighbouring units carry vowels and this unit has no nasal.
+## Step 2 — Tooling
 
-Then normalise to conventional Roman Hindi spellings, in this order:
-
-| Rule | Effect |
-|---|---|
-| `ie$` → `iye` | deejie → dijiye |
-| `ee` → `i` | bhee → bhi, kee → ki |
-| `^oo` → `u` | oopar → upar (leaves hoon, doon alone) |
-| `aa$` → `a` | rahaa → raha (leaves aap, kaam, saath alone) |
-
-### `glossary.py` — the project's word list
-
-One dict, `G`, mapping Devanagari-spelled English to real English
-(`'रेंज':'range'`). Starts empty and grows through Step 5. Append-only:
-later `G.update({...})` blocks override earlier ones, so a correction is
-just another line at the bottom.
-
-### `convert.py` — the driver
+Note the OS first. Every command below branches on it.
 
 ```bash
-python convert.py <url> <out-dir> [options]
+yt-dlp --version
+python3 -m yt_dlp --version    # Windows: py -3 -m yt_dlp --version
+```
+
+Use whichever answers for every later command.
+
+**Found — update it.** A stale yt-dlp stops returning caption tracks without
+saying so.
+
+| Found via | Update |
+|---|---|
+| `python3 -m yt_dlp` | `python3 -m pip install -U "yt-dlp[default]"` |
+| the `yt-dlp` command | Take this OS's command from the wiki's Update section |
+
+**Not found — install it.** Do not write the steps from memory. Open the
+[yt-dlp Installation wiki](https://github.com/yt-dlp/yt-dlp/wiki/Installation),
+read only this OS's section, follow it. Re-run the check before moving on.
+
+## Step 3 — Get the scripts
+
+Check whether this base is already set up:
+
+```bash
+ls <base>/tools/translit.py
+```
+
+**Already there** — skip the copy. Only run the two tests below.
+
+**Not there** — copy both. Do not write them.
+
+```bash
+mkdir -p <base>/tools
+SRC=https://raw.githubusercontent.com/AlmaasTalha/youtube-hindi-to-roman-transcript-skill/main
+curl -o <base>/tools/translit.py $SRC/translit.py
+curl -o <base>/tools/convert.py  $SRC/convert.py
+```
+
+Either way, test before converting anything:
+
+```bash
+python <base>/tools/translit.py --test
+python <base>/tools/convert.py --test
+```
+
+Both must print `N/N` with no `FAIL` lines.
+
+**On failure**, check the copy landed:
+
+```bash
+head -1 <base>/tools/translit.py    # must read:  # -*- coding: utf-8 -*-
+```
+
+Wrong line = the download failed. Re-copy **once**, re-run.
+
+Still failing, or the file looks intact: **stop**. Do not retry again and do not
+convert anything. Show the user the `FAIL` lines, say the transcript cannot be
+trusted, and give them
+<https://github.com/AlmaasTalha/youtube-hindi-to-roman-transcript-skill/issues>.
+Do not open the issue yourself.
+
+`glossary.py` is created empty on first run and grows in Step 5.
+
+## Step 4 — Run
+
+```bash
+python <base>/tools/convert.py <url> "<base>/<subject folder>" [options]
 ```
 
 | Flag | Effect |
 |---|---|
-| `--name "01 - Episode"` | filename stem (default: video title) |
-| `--timestamps` | keep `[HH:MM:SS]` in the Roman file too |
-| `--items all` \| `3` \| `1-5` | playlist: which videos. Omit to just **list** the playlist and stop. |
-| `--reroman` | rebuild every Roman file from the Devanagari on disk. No download. |
-| `--apply FILE` | add `roman=english` lines to the glossary (Step 5) |
+| `--name "01 - Episode"` | Filename stem. Default: video title |
+| `--timestamps` | Keep `[HH:MM:SS]` in the Roman file too |
+| `--items all` \| `3` \| `1-5` \| `2,5` | Playlist: which videos |
+| `--reroman` | Rebuild every Roman file from the Devanagari on disk. No download |
+| `--apply FILE` | Add `roman=english` lines to the glossary |
 
-What it must do:
+Playlist: run it bare first to print the list, show the user, then ask which
+items. Playlist position often differs from the course's episode numbers — if it
+does, run the videos individually with `--name`.
 
-- **Pick the track:** manual subtitles beat auto-captions; within each, a `*-orig` track beats an auto-translated one. Print which one it used.
-- **Download `json3`**, not VTT — json3 gives one clean event per line. VTT auto-captions roll each line twice with word-level `<c>` tags while manual VTT has none, and one parser cannot cover both.
-- **Romanise:** glossary first (exact whole-word match), then `translit.roman()` on whatever is left. Anything matched by the glossary is genuine English; anything left is genuine Hindi.
-- **Report per video:** line count, word count, glossary hit %, and how much Devanagari is left in the Roman file. `devanagari left 0` means the conversion is clean.
+After growing the glossary use `--reroman`, never the downloader again.
 
 Per video it writes:
 
-| File | What |
-|---|---|
-| `... - transcript (hi-orig).txt` | Exact line-by-line Devanagari, `[HH:MM:SS]` per line |
-| `... - transcript (roman).txt` | Roman Hindi |
-| `... - raw captions.json3` | Untouched download, backup |
-| `_glossary-todo.txt` | Every unknown word in the folder, ranked (Step 5) |
+| File | Where | Contents |
+|---|---|---|
+| `<stem>.txt` | subject folder | Roman Hindi — the file the user reads |
+| `<stem> (hi-orig).txt` | `raw/` | Devanagari, `[HH:MM:SS]` per line |
+| `<stem>.json3` | `raw/` | Raw download, backup |
+| `_glossary-todo.txt` | subject folder | Unknown words in that folder, ranked |
 
-Two things about `--reroman` and `--apply` that are easy to get wrong:
+It prints the track used, then lines, words, glossary hit % and
+`devanagari left`. `devanagari left 0` means the conversion is clean.
 
-- `--reroman` reads the `(hi-orig)` files from the out-dir **or its `backup/`
-  subfolder**, and writes the Roman files to the out-dir. The glossary is shared
-  across the project, so every time it grows the **whole** course should be
-  rebuilt — and going back through the downloader to do that re-fetches captions
-  that never changed.
-- `--apply` resolves each roman **back** to every Devanagari spelling that
-  produced it. That is the point: the ASR writes one word several ways (one
-  course spelled "rally" three ways), and you never type Devanagari, so you
-  cannot mistype it.
+### Human-written English on the video
 
-## Step 4 — Run it
+| It printed | Meaning | Do |
+|---|---|---|
+| `STOP —` | English is the only human track. Nothing was converted | Ask, then re-run |
+| `NOTE —` | A Hindi track won, but English also exists | Say so before they read the output |
 
-For a playlist, run it bare first to show the user the list, then ask which
-items. Note the naming: playlist mode numbers files by **playlist position**,
-which is often off-by-one from the episode numbers (an intro video at slot 1).
-If they differ, run the videos individually with `--name`.
+Either way give both sides:
+
+- **Human-written English:** punctuated, spell-checked, roughly a third fewer
+  tokens — but a translation, so the speaker's own words and Hindi terms are gone
+- **Auto Hindi romanised:** exactly what was said, Hindi terms intact — but no
+  punctuation, all lowercase, ASR errors pass through, and it costs more
+
+Human subtitles in any third language are ignored.
 
 ## Step 5 — Grow the glossary
 
-The glossary starts empty, so the first video of a new project has many misses.
-`_glossary-todo.txt` lists **every** unknown word across **every** transcript in
-the folder, most frequent first. Do not filter it by a "looks English" rule — one
-such filter silently hid `renj` (range) and `kansidar` (consider, 487 times).
+Read `_glossary-todo.txt` after the **whole batch**, not per video — it is
+rewritten every run and covers the whole folder.
 
-**The list is long, and the English runs all the way down it.** A 20-video course
-produced 5,295 entries. Work down to **count >= 3** — about 2,500 entries, covering
-99% of all occurrences. Do **not** stop where English "seems to thin out":
-`everyone` sat at rank 708, `course` at 1,803, `comments` at 4,936. Each is rare
-on its own, but together they put a wrong word in every few lines, and a reader
-sees them immediately.
-
-Most entries are genuine Hindi and are fine. Collect the ones that came out wrong
-into a file, one `roman=english` line each:
+Collect only the words that came out **wrong**, one per line:
 
 ```
 evrivan=everyone
 kost=course
-krosovar=crossover
 ```
-
-Then apply them and rebuild:
 
 ```bash
-python convert.py --apply words.txt "<out-dir>"
-python convert.py --reroman "<out-dir>"
+python <base>/tools/convert.py --apply words.txt "<base>/<subject folder>"
+python <base>/tools/convert.py --reroman "<base>/<subject folder>"
 ```
 
-Repeat until the Roman file reads clean. Then delete the todo file.
+Repeat until it reads clean, then delete the todo file.
 
-**Never put the glossary in CLAUDE.md.** It is a data file only Python reads —
-it costs zero context tokens where it is, and would cost thousands there.
+Rules:
 
-## Quality Expectations
+- Work down to **count >= 3**. English runs the full length of the list; it thins
+  in frequency, not in kind. Do not stop where it seems to thin out
+- Do not filter the list by a "looks English" rule
+- Skip any word that is also common Hindi — `बार` → "bar" breaks `बार-बार`.
+  Leave it out and let transliteration handle it
+- Before calling a word an ASR error, grep the `(hi-orig)` file. A correctly
+  spelled source word that read wrong is a glossary miss
+- Never put the glossary in `CLAUDE.md`. Only Python reads it
 
-Depends entirely on which track the video had:
+## Tell the user
 
-| Track | Result |
+| Track used | Expect |
 |---|---|
-| `manual/*` | Punctuation and correct spelling — close to publication quality |
-| `auto/*` | Meaning fully clear, but **no punctuation**, all-lowercase, and source ASR errors pass through |
+| Human-written | Punctuation and correct spelling, near publication quality |
+| Auto-generated | Meaning clear, but no punctuation, all lowercase, ASR errors pass through |
 
-Hand-correcting auto-caption output needs a model to read and rewrite every line —
-that costs more than everything else combined. Offer it, don't assume it.
+- Hand-correcting auto-caption output costs more than everything else combined.
+  Offer it; do not assume it
+- Numbers are the weak spot — auto-captions mangle prices, quantities and
+  tickers. If a video's value is in its arithmetic, say those figures must be
+  checked against the video
 
-**Numbers are the weak spot.** Auto-captions mangle prices, quantities and
-tickers. If an episode's value is in its arithmetic (position sizing, risk
-maths), say so plainly — those figures must be checked against the video.
+## Reading the output
 
-## Common Mistakes
-
-| Mistake | Fix |
-|---|---|
-| Skipping Step 1's save-location question | Files land somewhere the user didn't want. Always ask. |
-| Feeding a playlist URL with `--items` straight away | Run it bare first to show the user the list, then ask which ones. |
-| Reading the `.json3` backup | It's the raw download. Read the generated `.txt`. |
-| `cat`-ing a 2+ hour transcript in one go | Harness truncates large output. Read ~150-line chunks with `sed -n`. |
-| Adding every todo word to the glossary | Only the ones that came out **wrong**. Genuine Hindi words already transliterate correctly. |
-| Mapping a word that is also common Hindi | `बार` → "bar" broke every `बार-बार` ("baar-baar"). When a word has both meanings, leave it out and let transliteration handle it. |
-| Calling a wrong word an ASR error | Grep the `(hi-orig)` file first. `टीवीएस मोटर` was spelled right — "tivies Motor" was a plain glossary miss. Blaming ASR hides words you could have fixed. |
-| Stopping the todo review where English "thins out" | It thins in **frequency**, not in kind. `kost` (course) sits at rank 1,803, `kaments` at 4,936. Work down to count >= 3 or the transcript still reads broken. |
-| Re-running the downloader after growing the glossary | `--reroman` rebuilds from the Devanagari on disk. Re-downloading 20 videos to re-apply a word list is pure waste. |
-| Reviewing the todo list per video | It is rewritten every run and is folder-wide. Read it after the **whole batch**. |
+Read the generated `.txt`, never the `.json3`. Read ~150-line chunks with
+`sed -n` — a full transcript gets truncated.
